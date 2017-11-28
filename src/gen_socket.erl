@@ -40,7 +40,7 @@
          getsockname/1, getpeername/1, bind/2, connect/2, accept/1,
 	 input_event/2, output_event/2,
          recv/1, recv/2, recvmsg/2, recvmsg/3, recvfrom/1, recvfrom/2,
-         send/2, sendto/3,
+         send/2, sendto/3, sendmsg/5,
 	 read/1, read/2, write/2,
 	 getfd/1,
          listen/2, ioctl/3,
@@ -383,6 +383,12 @@ sendto(Socket, Address, Data) when ?IS_NIF_SOCKET(Socket), is_binary(Data) ->
 sendto(Socket, Address, Data) ->
     error(badarg, [Socket, Address, Data]).
 
+-spec sendmsg(socket(), sockaddr(), list(), iolist(), non_neg_integer()) -> ok.
+sendmsg(Socket, Address, CMsg, Data, Flag) when ?IS_NIF_SOCKET(Socket) ->
+    nif_sendmsg(nif_socket_of(Socket), Address, CMsg, Data, Flag);
+sendmsg(Socket, Address, CMsg, Data, Flag) ->
+    error(badarg, [Socket, Address, CMsg, Data, Flag]).
+
 -spec read(socket()) -> {ok, binary()} | {error, closed} | {error, posix_error()}.
 read(Socket) when ?IS_NIF_SOCKET(Socket) ->
     nif_read(nif_socket_of(Socket), -1).
@@ -449,6 +455,8 @@ nif_recvfrom(_NifSocket, _Length) ->
 nif_send(_NifSocket, _Data, _Flags) ->
     error(nif_not_loaded).
 nif_sendto(_NifSocket, _Data, _Flags, _Address) ->
+    error(nif_not_loaded).
+nif_sendmsg(_NifSocket, Address, _CMsg, _Data, _Flag) ->
     error(nif_not_loaded).
 nif_read(_NifSocket, _Length) ->
     error(nif_not_loaded).

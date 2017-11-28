@@ -58,7 +58,8 @@ all() ->
      async_connect, async_connect_econnrefused,
      enotconn_errors, socket_options, getsockfd,
      client_tcp_recv, client_tcp_read, client_udp_recvfrom,
-     client_tcp_send, client_tcp_write, client_udp_sendto].
+     client_tcp_send, client_tcp_write, client_udp_sendto,
+     client_udp_sendmsg_with_change_src_ip].
 
 %% -------------------------------------------------------------------------------------------------
 %% -- Test Cases
@@ -341,5 +342,39 @@ client_udp_sendto(_Config) ->
                       wait_for_output(ClientSocket, 20),
                       ?MATCH({ok, <<>>}, gen_socket:sendto(ClientSocket, ServerAddress, TestString)),
                       ?MATCH({ok, {ClientIP, ClientPort, TestString}},
+                             gen_udp:recv(ServerSocket, byte_size(TestString), 1000))
+                  end, TestStrings).
+
+client_udp_sendmsg_with_change_src_ip(_Config) ->
+    TestStrings = [<<"test">>, <<"test test">>],
+
+    %% open server socket
+    {ok, ServerSocket} = gen_udp:open(0, [{ip, {127,0,0,1}}, {active, false}, binary]),
+    {ok, ServerPort} = inet:port(ServerSocket),
+    ServerAddress = {inet4, {127,0,0,1}, ServerPort},
+
+    %% open redirector socket
+    {ok, RedirectorSocket} = gen_socket:socket(inet, dgram, udp),
+    ok = gen_socket:bind(RedirectorSocket, {inet4, {127,0,0,1}, 0}),
+    RedirectorAddress = {inet4, RedirectorIP, RedirectorPort} 
+                      = gen_socket:getsockname(RedirectorSocket),
+
+    %% open client socket
+    {ok, ClientSocket} = gen_udp:open(0, [{ip, {127,0,0,1}}, {active, false}, binary]),
+    {ok, ClientPort} = inet:port(ClientSocket),
+    ClientAddress = {inet4, {127,0,0,1}, ClientPort},
+    
+    lists:foreach(fun (TestString) ->
+                      gen_udp:send(ClientSocket, {127,0,0,1}, RedirectorPort, TestString),
+
+			          wait_for_input(RedirectorSocket, 20),
+                      {ok, ClientAddress, CMsg, TestString} = gen_socket:recvmsg(RedirectorSocket, 0),
+
+                      wait_for_output(RedirectorSocket, 20),
+                      % we get {error,eafnosupport} here
+                      ?MATCH({ok, <<>>}, gen_socket:sendmsg(RedirectorSocket, ServerAddress, CMsg, TestString, 0)),
+
+                      %?MATCH({ok, {{127,0,0,1}, ClientPort, TestString}},
+                      ?MATCH({ok, {{127,0,0,1}, RedirectorPort, TestString}},
                              gen_udp:recv(ServerSocket, byte_size(TestString), 1000))
                   end, TestStrings).

@@ -217,6 +217,7 @@ inet4_tuple_to_sockaddr(ErlNifEnv* env,
         };
     }
 
+
     *addrlen = required_addrlen;
     return required_addrlen;
 }
@@ -842,6 +843,60 @@ nif_sendto(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[])
 }
 
 // param 0: socket
+// param 1: Address
+// param 2: CMsg
+// param 3: Data
+// param 4: flag
+static ERL_NIF_TERM
+nif_sendmsg(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[])
+{
+    int socket;
+    ErlNifBinary data;
+    int flags;
+    ssize_t len;
+    struct sockaddr_in remote;
+    struct iovec iov;
+    struct msghdr msg;
+    socklen_t addrlen;
+
+    if (!enif_get_int(env, argv[0], &socket)
+	|| !term_to_sockaddr(env, argv[1], (struct sockaddr*) &remote, &addrlen)
+	|| !enif_is_list(env, argv[2])
+	|| !enif_inspect_binary(env, argv[3], &data)
+	|| !enif_get_int(env, argv[4], &flags))
+        return enif_make_badarg(env);
+
+    flags |= MSG_NOSIGNAL;
+    flags |= MSG_DONTWAIT;
+
+    msg.msg_name = (void*)&remote;
+    msg.msg_namelen = addrlen;
+    iov.iov_base = data.data;
+    iov.iov_len = data.size;
+    msg.msg_iov = &iov;
+    msg.msg_iovlen = 1;
+    msg.msg_control = NULL; /* empty for now */
+    msg.msg_controllen = 0;
+    msg.msg_flags = flags; 
+
+    while (42) {
+    if ((len = sendmsg(socket, &msg, flags)) >= 0)
+	    break;
+
+	switch (errno) {
+	case EINTR:
+	    continue;
+	    
+	default:
+	    return error_tuple(env, errno);
+	}
+    }
+
+    return enif_make_tuple2(env, atom_ok, 
+			    enif_make_sub_binary(env, argv[1], len, data.size - len));
+}
+
+// param 0: socket
 // param 1: number of bytes to receive, determined automatically if negative
 static ERL_NIF_TERM
 nif_read(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[])
@@ -1067,6 +1122,7 @@ static ErlNifFunc nif_funcs[] = {
     {"nif_recvfrom",        2, nif_recvfrom},
     {"nif_send",            3, nif_send},
     {"nif_sendto",          4, nif_sendto},
+    {"nif_sendmsg",         5, nif_sendmsg},
     {"nif_read",            2, nif_read},
     {"nif_write",           2, nif_write},
     {"nif_ioctl",           3, nif_ioctl},
