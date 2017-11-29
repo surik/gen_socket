@@ -72,6 +72,7 @@
 static ERL_NIF_TERM atom_ok;
 static ERL_NIF_TERM atom_eof;
 static ERL_NIF_TERM atom_error;
+static ERL_NIF_TERM atom_pktinfo;
 
 // AF NAMES
 static ERL_NIF_TERM atom_unix;
@@ -331,6 +332,7 @@ int load(ErlNifEnv* env, void** priv_data, ERL_NIF_TERM load_info)
     atom_ok      = enif_make_atom(env, "ok");
     atom_eof     = enif_make_atom(env, "eof");
     atom_error   = enif_make_atom(env, "error");
+    atom_pktinfo = enif_make_atom(env, "pktinfo");
     atom_unix    = enif_make_atom(env, "unix");
     atom_inet4   = enif_make_atom(env, "inet4");
     atom_inet6   = enif_make_atom(env, "inet6");
@@ -852,12 +854,16 @@ nif_sendmsg(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[])
 {
     int socket;
     ErlNifBinary data;
+    ERL_NIF_TERM head, tail, cmsgs = argv[2];
     int flags;
+    int cmsg_space = 0;
     ssize_t len;
-    struct sockaddr_in remote;
+    struct sockaddr_in remote, source;
     struct iovec iov;
     struct msghdr msg;
+    struct cmsghdr* cmsg = NULL;
     socklen_t addrlen;
+    char msg_control[1024];
 
     if (!enif_get_int(env, argv[0], &socket)
 	|| !term_to_sockaddr(env, argv[1], (struct sockaddr*) &remote, &addrlen)
@@ -875,9 +881,29 @@ nif_sendmsg(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[])
     iov.iov_len = data.size;
     msg.msg_iov = &iov;
     msg.msg_iovlen = 1;
-    msg.msg_control = NULL; /* empty for now */
-    msg.msg_controllen = 0;
-    msg.msg_flags = flags; 
+    msg.msg_control = msg_control;
+    msg.msg_controllen = sizeof(msg_control);
+    cmsg = CMSG_FIRSTHDR(&msg);
+    while(enif_get_list_cell(env, cmsgs, &head, &tail)) {
+        int arity;
+        const ERL_NIF_TERM *array;
+        if (enif_get_tuple(env, head, &arity, &array) 
+            && arity == 2
+            && enif_is_identical(array[0], atom_pktinfo))
+        {
+            struct in_pktinfo in_pktinfo; 
+            term_to_sockaddr(env, array[1], (struct sockaddr*) &source, &addrlen);
+            cmsg->cmsg_level = IPPROTO_IP;
+            cmsg->cmsg_type  = IP_PKTINFO;
+            cmsg->cmsg_len   = CMSG_LEN(sizeof(in_pktinfo));
+            in_pktinfo.ipi_spec_dst = source.sin_addr;
+            *(struct in_pktinfo*)CMSG_DATA(cmsg) = in_pktinfo;
+            cmsg_space += CMSG_SPACE(sizeof(in_pktinfo));
+            CMSG_NXTHDR(&msg, cmsg);
+        }
+        cmsgs = tail;
+    }
+    msg.msg_controllen = cmsg_space;
 
     while (42) {
     if ((len = sendmsg(socket, &msg, flags)) >= 0)

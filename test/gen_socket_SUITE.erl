@@ -349,32 +349,35 @@ client_udp_sendmsg_with_change_src_ip(_Config) ->
     TestStrings = [<<"test">>, <<"test test">>],
 
     %% open server socket
-    {ok, ServerSocket} = gen_udp:open(0, [{ip, {127,0,0,1}}, {active, false}, binary]),
+    ServerIP = {127,0,0,1},
+    {ok, ServerSocket} = gen_udp:open(0, [{ip, ServerIP}, {active, false}, binary]),
     {ok, ServerPort} = inet:port(ServerSocket),
-    ServerAddress = {inet4, {127,0,0,1}, ServerPort},
+    ServerAddress = {inet4, ServerIP, ServerPort},
 
     %% open redirector socket
+    RedirectorIP = {127,0,0,2},
     {ok, RedirectorSocket} = gen_socket:socket(inet, dgram, udp),
-    ok = gen_socket:bind(RedirectorSocket, {inet4, {127,0,0,1}, 0}),
-    RedirectorAddress = {inet4, RedirectorIP, RedirectorPort} 
-                      = gen_socket:getsockname(RedirectorSocket),
+    ok = gen_socket:bind(RedirectorSocket, {inet4, RedirectorIP, 0}),
+    _RedirectorAddress = {inet4, RedirectorIP, RedirectorPort} 
+                       = gen_socket:getsockname(RedirectorSocket),
 
     %% open client socket
-    {ok, ClientSocket} = gen_udp:open(0, [{ip, {127,0,0,1}}, {active, false}, binary]),
+    ClientIP = {127,0,0,3},
+    {ok, ClientSocket} = gen_udp:open(0, [{ip, ClientIP}, {active, false}, binary]),
     {ok, ClientPort} = inet:port(ClientSocket),
-    ClientAddress = {inet4, {127,0,0,1}, ClientPort},
-    
-    lists:foreach(fun (TestString) ->
-                      gen_udp:send(ClientSocket, {127,0,0,1}, RedirectorPort, TestString),
+    ClientAddress = {inet4, ClientIP, ClientPort},
 
-			          wait_for_input(RedirectorSocket, 20),
+    lists:foreach(fun (TestString) ->
+                      gen_udp:send(ClientSocket, RedirectorIP, RedirectorPort, TestString),
+
+                      wait_for_input(RedirectorSocket, 20),
                       {ok, ClientAddress, CMsg, TestString} = gen_socket:recvmsg(RedirectorSocket, 0),
 
                       wait_for_output(RedirectorSocket, 20),
-                      % we get {error,eafnosupport} here
-                      ?MATCH({ok, <<>>}, gen_socket:sendmsg(RedirectorSocket, ServerAddress, CMsg, TestString, 0)),
+                      NCMsg = [{pktinfo, ClientAddress} | CMsg], % pretend client
+                      ?MATCH({ok, <<>>}, gen_socket:sendmsg(RedirectorSocket, ServerAddress, NCMsg, TestString, 0)),
 
                       %?MATCH({ok, {{127,0,0,1}, ClientPort, TestString}},
-                      ?MATCH({ok, {{127,0,0,1}, RedirectorPort, TestString}},
+                      ?MATCH({ok, {ClientIP, RedirectorPort, TestString}},
                              gen_udp:recv(ServerSocket, byte_size(TestString), 1000))
                   end, TestStrings).
