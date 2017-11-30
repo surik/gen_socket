@@ -58,7 +58,8 @@ all() ->
      async_connect, async_connect_econnrefused,
      enotconn_errors, socket_options, getsockfd,
      client_tcp_recv, client_tcp_read, client_udp_recvfrom,
-     client_tcp_send, client_tcp_write, client_udp_sendto].
+     client_tcp_send, client_tcp_write, client_udp_sendto,
+     client_raw_udp_sendto].
 
 %% -------------------------------------------------------------------------------------------------
 %% -- Test Cases
@@ -343,3 +344,52 @@ client_udp_sendto(_Config) ->
                       ?MATCH({ok, {ClientIP, ClientPort, TestString}},
                              gen_udp:recv(ServerSocket, byte_size(TestString), 1000))
                   end, TestStrings).
+
+client_raw_udp_sendto(_Config) ->
+    TestStrings = [<<"test">>, <<"test test">>],
+
+    %% open server socket
+    ServerIP = {127,0,0,1},
+    {ok, ServerSocket} = gen_udp:open(0, [{ip, ServerIP}, {active, false}, binary]),
+    {ok, ServerPort} = inet:port(ServerSocket),
+    ServerAddress = {inet4, ServerIP, ServerPort},
+
+    %% open redirector socket
+    {ok, RedirectorSocket} = gen_socket:socket(inet, raw, udp),
+    ok = gen_socket:bind(RedirectorSocket, {inet4, {127,0,0,1}, 0}),
+    {inet4, RedirectorIP, RedirectorPort} = gen_socket:getsockname(RedirectorSocket),
+
+    %% open server socket
+    ClientIP = {127,0,0,1},
+    {ok, ClientSocket} = gen_udp:open(0, [{ip, ClientIP}, {active, false}, binary]),
+    {ok, ClientPort} = inet:port(ClientSocket),
+    ClientAddress = {inet4, {127,0,0,1}, ClientPort},
+
+    %% send test strings from the client to the server
+    lists:foreach(fun (TestString) ->
+                      ?MATCH(ok, gen_udp:send(ClientSocket, RedirectorIP, RedirectorPort, TestString)),
+
+                      wait_for_input(RedirectorSocket, 20),
+			          {ok, Frame} = gen_socket:recv(RedirectorSocket, 1000),
+
+                      %NewFrame = set_ip_port(Frame, {10,10,10,10}, 10000),
+                      % send packet as is for now
+                      NewFrame = Frame,
+                      wait_for_output(RedirectorSocket, 20),
+                      ?MATCH({ok, <<>>}, gen_socket:sendto(RedirectorSocket, ServerAddress, NewFrame)),
+
+                      ?MATCH({ok, {ClientIP, ClientPort, TestString}},
+                             gen_udp:recv(ServerSocket, byte_size(TestString), 1000))
+                  end, TestStrings).
+
+set_ip_port(Frame, {NSA1, NSA2, NSA3, NSA4}, Port) ->
+    <<4:4, HL:4, 
+      % Tos:8, Len:16, Id:16, 0:1, DF:1, MF:1, Off:13, TTL:8, P:8, Sum:16
+      Skip:88,
+      SA1:8, SA2:8, SA3:8, SA4:8, DA:32,
+      Rest/binary>> = Frame,
+    OptLen = (HL - 5) * 4,
+    <<Opt:OptLen/binary, UDP/binary>> = Rest,
+    <<SPort:16, _DPort:16, _ULen:16, _Sum:16, Payload/binary>> = UDP,
+    NUDP = <<Port:16, _DPort:16, _ULen:16, _Sum:16, Payload/binary>>,
+    <<4:4, HL:4, Skip:88, NSA1:8, NSA2:8, NSA3:8, NSA4:8, DA:32, Opt:OptLen/binary, NUDP/binary>>.
